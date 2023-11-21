@@ -1,12 +1,15 @@
 import argparse
 import os 
+import math
 import numpy as np
 from tqdm import tqdm
+import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
+from torch.autograd import Variable
 from torchvision import transforms
 from torchvision.utils import make_grid, save_image
 
@@ -15,11 +18,106 @@ import torch.optim as optim
 
 from model import Generator, Discriminator
 
+def crop_to_subregions(image, sub_size):
+    _, _, H, W = image.shape  # Assuming image is a tensor of shape [B, C, H, W]
+    assert H % sub_size == 0 and W % sub_size == 0, "Image dimensions must be divisible by sub_size"
+
+    subregions = []
+
+    # Calculate number of subregions in each dimension
+    n_sub_h = H // sub_size
+    n_sub_w = W // sub_size
+
+    for i in range(n_sub_h):
+        for j in range(n_sub_w):
+            start_i = i * sub_size
+            start_j = j * sub_size
+            subregion = image[:, :, start_i:start_i + sub_size, start_j:start_j + sub_size]
+            subregions.append(subregion)
+
+    return subregions
+
+
+# fixed noise & label
+def show_result(G, num_epoch, show = False, save = False, path = 'result.png', nb = 16, latent_size = 128, label_size=4, sub_size = 64):
+    img_size = sub_size * int(math.sqrt(label_size))
+
+    if nb > 1:
+        size_figure_grid = int(nb/4)
+        fig, ax = plt.subplots(size_figure_grid, size_figure_grid, figsize=(15, 15), constrained_layout=True)
+        for i, j in itertools.product(range(size_figure_grid), range(size_figure_grid)):
+            ax[i, j].get_xaxis().set_visible(False)
+            ax[i, j].get_yaxis().set_visible(False)
+    else:
+        fig = plt.figure(figsize=(1, 1))
+        ax = plt.Axes(fig, [0., 0., 1., 1.])
+        ax.set_axis_off()
+        fig.add_axes(ax)
+
+    G.eval()
+
+    z = torch.randn(nb, latent_size)
+    z = z.repeat(label_size, 1)
+    z = Variable(z.cuda())
+
+    y = np.concatenate([
+        [[i]] * nb for i in range(label_size)
+    ])
+    y = torch.from_numpy(y).cuda()
+
+    G_result = G(z, y)
+    G_result = G_result * 0.5 + 0.5
+
+    sub = []
+    for i in range(label_size):
+        start_i = i * nb
+        sub.append(G_result[start_i:start_i+nb])
+
+    n_sub_h = img_size // sub_size
+    n_sub_w = img_size // sub_size
+
+    rows = []
+    for i in range(n_sub_w):
+        start_i = i * n_sub_w
+        rows.append(sub[start_i: start_i+n_sub_w])
+
+
+    full_images = []
+    for i in range(n_sub_h):
+        full_images.append(torch.cat(rows[i], dim=3))
+
+    full_images = torch.cat(full_images, dim=2)
+
+
+    if nb > 1:
+        for k in range(4*4):
+            i = k // 4
+            j = k % 4
+            ax[i, j].cla()
+            full_image = full_images[k]
+            full_image = full_image.permute(1, 2, 0).cpu().data.numpy()
+            full_image = (full_image * 255).astype(np.uint8)
+            ax[i, j].imshow(full_image)
+        plt.savefig(path)
+
+        if show:
+            plt.show()
+        else:
+            plt.close()
+    else:
+        full_image = full_images[0].permute(1, 2, 0).cpu().data.numpy()
+        full_image = (full_image * 255).astype(np.uint8)
+        ax.imshow(full_image)
+        fig.savefig(path, dpi=full_image.shape[0]) 
+        plt.close(fig)
+
+    G.train()
+
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
   parser.add_argument('--epochs', type=int, default=40, help='training epoch number')
-  parser.add_argument('--out_res', type=int, default=128, help='The resolution of final output image')
+  parser.add_argument('--out_res', type=int, default=64, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
   parser.add_argument('--cuda', action='store_true', help='Using GPU to train')
   parser.add_argument('--img_size', type=int, default=128, help='The resolution of dataset image')
@@ -42,12 +140,12 @@ def main():
   if not os.path.exists(weight_dir):
     os.makedirs(weight_dir)
 
-  ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches]
-  schedule = [[5, 15, 25 ,35, 40],[16, 16, 16, 8, 4],[5, 5, 5, 1, 1]]
+  ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
+  schedule = [[1, 15, 25 ,35, 40],[4, 8, 16, 32, 64],[1, 5, 5, 1, 1]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
-  latent_size = 128
+  latent_size = 512
   out_res = opt.out_res
   lr = 1e-4
   lambd = 10
@@ -61,9 +159,8 @@ def main():
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
 
-
-  D_net = Discriminator(latent_size, out_res).to(device)
-  G_net = Generator(latent_size, out_res, label_size).to(device)
+  D_net = Discriminator(latent_size, label_size, out_res).to(device)
+  G_net = Generator(latent_size, label_size, out_res).to(device)
 
   fixed_noise = torch.randn(16, latent_size, 1, 1, device=device)
   D_optimizer = optim.Adam(D_net.parameters(), lr=lr, betas=(0, 0.99))
@@ -129,6 +226,7 @@ def main():
 
   size = 2**(G_net.depth+1)
   print("Output Resolution: %d x %d" % (size, size))
+  print("BS", batch_size)
 
   y_real = torch.ones(batch_size * n_sub, 1).cuda()
   y_fake = torch.zeros(batch_size * n_sub, 1).cuda()
@@ -150,6 +248,7 @@ def main():
         D_net.growing_net(growing*tot_iter_num)
         size = 2**(G_net.depth+1)
         print("Output Resolution: %d x %d" % (size, size))
+        print("BS", batch_size)
 
     y = np.concatenate([[[i]] * batch_size for i in range(n_sub)])
     y = torch.from_numpy(y).cuda()
@@ -157,31 +256,47 @@ def main():
     print("epoch: %i/%i" % (int(epoch), int(epochs)))
     databar = tqdm(data_loader)
 
-    for i, samples in enumerate(databar):
+    for i, x in enumerate(databar):
+      batches_done = (epoch - 1) * len(data_loader) + i
+
       ##  update D
       if size != out_res:
-        samples = F.interpolate(samples[0], size=size).to(device)
+        x = F.interpolate(x[0], size=size*2).to(device)
       else:
-        samples = samples[0].to(device)
+        x = x[0].to(device)
+
+      
+      subregions = crop_to_subregions(x, size)
+      xs = torch.cat(subregions, dim=0)
+      xs = xs.view(-1, 3, size, size)
+      xs = Variable(xs.cuda())
       D_net.zero_grad()
-      noise = torch.randn(samples.size(0), latent_size, 1, 1, device=device)
+
+      noise = torch.randn(x.size(0), latent_size)
+      noise = noise.repeat(label_size, 1)
+      noise = Variable(noise.cuda())
+
+
+      # noise = torch.randn(samples.size(0), latent_size, 1, 1, device=device)
+
       fake = G_net(noise, y)
-      fake_out = D_net(fake.detach())
-      real_out = D_net(samples)
+
+      fake_out = D_net(fake.detach(), y)
+      real_out = D_net(xs, y)
 
       ## Gradient Penalty
 
-      eps = torch.rand(samples.size(0), 1, 1, 1, device=device)
-      eps = eps.expand_as(samples)
-      x_hat = eps * samples + (1 - eps) * fake.detach()
+      eps = torch.rand(xs.size(0), 1, 1, 1, device=device)
+      eps = eps.expand_as(xs)
+      x_hat = eps * xs + (1 - eps) * fake.detach()
       x_hat.requires_grad = True
-      px_hat = D_net(x_hat)
+      px_hat = D_net(x_hat, y)
       grad = torch.autograd.grad(
                     outputs = px_hat.sum(),
                     inputs = x_hat, 
                     create_graph=True
                     )[0]
-      grad_norm = grad.view(samples.size(0), -1).norm(2, dim=1)
+      grad_norm = grad.view(xs.size(0), -1).norm(2, dim=1)
       gradient_penalty = lambd * ((grad_norm  - 1)**2).mean()
 
       ###########
@@ -194,7 +309,7 @@ def main():
       ##  update G
 
       G_net.zero_grad()
-      fake_out = D_net(fake)
+      fake_out = D_net(fake, y)
 
       G_loss = - fake_out.mean()
 
@@ -209,14 +324,20 @@ def main():
       iter_num += 1
 
 
-      if i % 500== 0:
+      if i % 5000== 0:
         D_running_loss /= iter_num
         G_running_loss /= iter_num
-        print('iteration : %d, gp: %.2f' % (i, gradient_penalty))
-        databar.set_description('D_loss: %.3f   G_loss: %.3f' % (D_running_loss ,G_running_loss))
+        #print('iteration : %d, gp: %.2f' % (i, gradient_penalty))
+        #databar.set_description('D_loss: %.3f   G_loss: %.3f' % (D_running_loss ,G_running_loss))
+        databar.set_postfix({"G_loss": G_running_loss, "D_loss": D_running_loss})
+                   
         iter_num = 0
         D_running_loss = 0.0
         G_running_loss = 0.0
+
+      if batches_done % 10000 == 0:
+        show_result(G_net, (epoch+1), save=True, path='output/img' + str(batches_done) + '.png', nb=16, latent_size=latent_size, label_size=label_size, sub_size=size)
+        #show_result(G_net, (epoch+1), save=True, path=original_fixed_p, nb=1)
 
       
     D_epoch_losses.append(D_epoch_loss/tot_iter_num)
@@ -233,14 +354,16 @@ def main():
           'depth': G_net.depth,
           'alpha':G_net.alpha
           }
+
     with torch.no_grad():
       G_net.eval()
       torch.save(check_point, check_point_dir + 'check_point_epoch_%d.pth' % (epoch))
       torch.save(G_net.state_dict(), weight_dir + 'G_weight_epoch_%d.pth' %(epoch))
-      out_imgs = G_net(fixed_noise)
-      out_grid = make_grid(out_imgs, normalize=True, nrow=4, scale_each=True, padding=int(0.5*(2**G_net.depth))).permute(1,2,0)
-      plt.imshow(out_grid.cpu())
-      plt.savefig(output_dir + 'size_%i_epoch_%d' %(size ,epoch))
+      
+      # out_imgs = G_net(fixed_noise)
+      # out_grid = make_grid(out_imgs, normalize=True, nrow=4, scale_each=True, padding=int(0.5*(2**G_net.depth))).permute(1,2,0)
+      # plt.imshow(out_grid.cpu())
+      # plt.savefig(output_dir + 'size_%i_epoch_%d' %(size ,epoch))
 
 
 
