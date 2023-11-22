@@ -116,11 +116,11 @@ def show_result(G, num_epoch, show = False, save = False, path = 'result.png', n
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
-  parser.add_argument('--epochs', type=int, default=40, help='training epoch number')
-  parser.add_argument('--out_res', type=int, default=64, help='The resolution of final output image')
+  parser.add_argument('--epochs', type=int, default=65, help='training epoch number')
+  parser.add_argument('--out_res', type=int, default=128, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
   parser.add_argument('--cuda', action='store_true', help='Using GPU to train')
-  parser.add_argument('--img_size', type=int, default=128, help='The resolution of dataset image')
+  parser.add_argument('--img_size', type=int, default=256, help='The resolution of dataset image')
 
 
   opt = parser.parse_args()
@@ -141,13 +141,14 @@ def main():
     os.makedirs(weight_dir)
 
   ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
-  schedule = [[1, 15, 25 ,35, 40],[4, 8, 16, 32, 64],[1, 5, 5, 1, 1]]
+  schedule = [[0, 10, 20 ,25, 30, 35],[16, 16, 16, 8, 8, 4],[1, 3, 3, 3, 3, 5]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
   latent_size = 512
   out_res = opt.out_res
-  lr = 1e-4
+  G_lr = 1e-4
+  D_lr = 1e-4 * 4
   lambd = 10
 
   device = torch.device('cuda:0' if (torch.cuda.is_available() and opt.cuda)  else 'cpu')
@@ -163,8 +164,8 @@ def main():
   G_net = Generator(latent_size, label_size, out_res).to(device)
 
   fixed_noise = torch.randn(16, latent_size, 1, 1, device=device)
-  D_optimizer = optim.Adam(D_net.parameters(), lr=lr, betas=(0, 0.99))
-  G_optimizer = optim.Adam(G_net.parameters(), lr=lr, betas=(0, 0.99))
+  D_optimizer = optim.Adam(D_net.parameters(), lr=D_lr, betas=(0, 0.99))
+  G_optimizer = optim.Adam(G_net.parameters(), lr=G_lr, betas=(0, 0.99))
 
 
   D_running_loss = 0.0
@@ -193,9 +194,23 @@ def main():
     G_net.alpha = check_point['alpha']
     D_net.alpha = check_point['alpha']
 
+  def find_index(arr, value):
+    index = -1
+    for i in range(len(arr)):
+        if arr[i] < value:
+            index = i
+        else:
+            break
+    return index
 
   try:
-    c = next(x[0] for x in enumerate(schedule[0]) if x[1]>opt.resume)-1
+    if opt.resume != 0:
+      #c = next(x[0] for x in enumerate(schedule[0]) if x[1]>opt.resume)
+      c = find_index(schedule[0], opt.resume)
+    else:
+      c = 0
+
+    print(c)
     batch_size = schedule[1][c]
     growing = schedule[2][c]
     #dataset = datasets.ImageFolder(data_dir, transform=transform)
@@ -207,7 +222,8 @@ def main():
     D_net.fade_iters = (1-D_net.alpha)/(schedule[0][c+1]-opt.resume)/(2*tot_iter_num)
 
 
-  except:
+  except Exception as e:
+    print(e)
     print('Fully Grown\n')
     c = -1
     batch_size = schedule[1][c]
@@ -226,7 +242,8 @@ def main():
 
   size = 2**(G_net.depth+1)
   print("Output Resolution: %d x %d" % (size, size))
-  print("BS", batch_size)
+  print("Batch Size: %d" % (batch_size))
+  print("Growing Phase %d" % (growing))
 
   y_real = torch.ones(batch_size * n_sub, 1).cuda()
   y_fake = torch.zeros(batch_size * n_sub, 1).cuda()
@@ -236,25 +253,26 @@ def main():
     G_net.train()
     D_epoch_loss = 0.0
     G_epoch_loss = 0.0
-    if epoch-1 in schedule[0]:
+    if epoch in schedule[0]:
 
       if (2 **(G_net.depth +1) < out_res):
-        c = schedule[0].index(epoch-1)
+        c = schedule[0].index(epoch)
         batch_size = schedule[1][c]
-        growing = schedule[2][0]
+        growing = schedule[2][c]
         data_loader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, num_workers=8, drop_last=True)
         tot_iter_num = tot_iter_num = (len(dataset)/batch_size)
         G_net.growing_net(growing*tot_iter_num)
         D_net.growing_net(growing*tot_iter_num)
         size = 2**(G_net.depth+1)
         print("Output Resolution: %d x %d" % (size, size))
-        print("BS", batch_size)
+        print("Batch Size: %d" % (batch_size))
+        print("Growing Phase %d" % (growing))
 
     y = np.concatenate([[[i]] * batch_size for i in range(n_sub)])
     y = torch.from_numpy(y).cuda()
 
     print("epoch: %i/%i" % (int(epoch), int(epochs)))
-    databar = tqdm(data_loader)
+    databar = tqdm(data_loader, unit="batch", ncols=120, miniters=0)
 
     for i, x in enumerate(databar):
       batches_done = (epoch - 1) * len(data_loader) + i
@@ -309,11 +327,40 @@ def main():
       ##  update G
 
       G_net.zero_grad()
+
+
+      sub = []
+      for j in range(n_sub):
+          start_j = j * batch_size
+          sub.append(fake[start_j:start_j+batch_size])
+
+      n_sub_h = int(math.sqrt(label_size))
+      n_sub_w = int(math.sqrt(label_size))
+
+
+      # (NSUB, B, C, H, W)
+      f_rows = torch.zeros(n_sub_w, batch_size, 3, size, size*n_sub_w).cuda()
+      f_cols = torch.zeros(n_sub_h, batch_size, 3, size*n_sub_h, size).cuda()
+
+      for j in range(n_sub_w):
+          start_j = j * n_sub_w
+          f_rows[j] = torch.cat(sub[start_j: start_j+n_sub_w], dim=3).cuda()
+          f_cols[j] = torch.cat(sub[j::n_sub_h], dim=2).cuda()
+
+
+      boundary_thickness = 1
+
+      diff_rows = F.mse_loss(f_rows[:-1, :, :, -boundary_thickness: :], f_rows[1:, :, :, :boundary_thickness, :])
+      diff_cols = F.mse_loss(f_cols[:-1, :, :, :, -boundary_thickness:], f_cols[1:, :, :, :, :boundary_thickness])
+      B_loss = diff_rows + diff_cols
+
+      B_lambda = 15
+
       fake_out = D_net(fake, y)
-
       G_loss = - fake_out.mean()
+      G_train_loss = G_loss + B_lambda * B_loss
 
-      G_loss.backward()
+      G_train_loss.backward()
       G_optimizer.step()
 
       ##############
@@ -329,13 +376,13 @@ def main():
         G_running_loss /= iter_num
         #print('iteration : %d, gp: %.2f' % (i, gradient_penalty))
         #databar.set_description('D_loss: %.3f   G_loss: %.3f' % (D_running_loss ,G_running_loss))
-        databar.set_postfix({"G_loss": G_running_loss, "D_loss": D_running_loss})
+        databar.set_postfix({"G_loss": G_running_loss, "D_loss": D_running_loss, "B_loss": B_loss.item()})
                    
         iter_num = 0
         D_running_loss = 0.0
         G_running_loss = 0.0
 
-      if batches_done % 10000 == 0:
+      if batches_done % 5000 == 0:
         show_result(G_net, (epoch+1), save=True, path='output/img' + str(batches_done) + '.png', nb=16, latent_size=latent_size, label_size=label_size, sub_size=size)
         #show_result(G_net, (epoch+1), save=True, path=original_fixed_p, nb=1)
 
