@@ -27,31 +27,62 @@ class ToRGB(nn.Module):
 
     return self.conv(x)
 
+# class ConditionalBatchNorm2d(nn.Module):
+#     def __init__(self, num_features, num_classes):
+#         super().__init__()
+#         self.num_features = num_features
+#         self.bn = nn.BatchNorm2d(num_features, affine=False)
+#         self.gamma_embed = nn.Linear(num_classes, num_features)
+#         self.beta_embed = nn.Linear(num_classes, num_features)
+
+#     def forward(self, x, y):
+#         out = self.bn(x)
+#         y = y.long()
+#         # Assuming y is a batch of class labels, convert to one-hot encoding
+#         y_one_hot = F.one_hot(y, num_classes=self.gamma_embed.in_features).float()
+        
+#         gamma = self.gamma_embed(y_one_hot).view(-1, self.num_features, 1, 1)
+#         beta = self.beta_embed(y_one_hot).view(-1, self.num_features, 1, 1)
+
+#         return out * gamma + beta
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 class ConditionalBatchNorm2d(nn.Module):
-    def __init__(self, num_features, num_classes):
+    def __init__(self, num_features, num_classes, dropout_rate=0.3, noise_std=0.1):
         super().__init__()
         self.num_features = num_features
         self.bn = nn.BatchNorm2d(num_features, affine=False)
-        self.gamma_embed = nn.Linear(num_classes, num_features)
-        self.beta_embed = nn.Linear(num_classes, num_features)
+        self.affine_transform = nn.Linear(num_classes, 2 * num_features)
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.noise_std = noise_std
 
     def forward(self, x, y):
         out = self.bn(x)
         y = y.long()
-        # Assuming y is a batch of class labels, convert to one-hot encoding
-        y_one_hot = F.one_hot(y, num_classes=self.gamma_embed.in_features).float()
+        y_one_hot = F.one_hot(y, num_classes=self.affine_transform.in_features).float()
+
+        # Apply dropout to the one-hot encoding
+        y_one_hot = self.dropout(y_one_hot)
         
-        gamma = self.gamma_embed(y_one_hot).view(-1, self.num_features, 1, 1)
-        beta = self.beta_embed(y_one_hot).view(-1, self.num_features, 1, 1)
+        # Add Gaussian noise to the one-hot encoding
+        if self.training:  # Only add noise during training
+            noise = torch.randn_like(y_one_hot) * self.noise_std
+            y_one_hot = y_one_hot + noise
+
+        gamma_beta = self.affine_transform(y_one_hot)
+        gamma, beta = gamma_beta.view(-1, 2, self.num_features, 1, 1).unbind(1)
 
         return out * gamma + beta
 
-    # def forward(self, x, y):
-    #     out = self.bn(x)
-    #     y = y.float()
-    #     gamma = self.gamma_embed(y).view(-1, self.num_features, 1, 1)
-    #     beta = self.beta_embed(y).view(-1, self.num_features, 1, 1)
-    #     return out * gamma + beta
+
 
 class G_Block(nn.Module):
   def __init__(self, in_ch, out_ch, initial_block=False):
