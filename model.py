@@ -6,7 +6,6 @@ import torch.optim as optim
 from utils import EqualizedLR_Conv2d, Pixel_norm, Minibatch_std
 
 
-  
 
 class FromRGB(nn.Module):
   def __init__(self, in_ch, out_ch):
@@ -27,33 +26,6 @@ class ToRGB(nn.Module):
 
     return self.conv(x)
 
-# class ConditionalBatchNorm2d(nn.Module):
-#     def __init__(self, num_features, num_classes):
-#         super().__init__()
-#         self.num_features = num_features
-#         self.bn = nn.BatchNorm2d(num_features, affine=False)
-#         self.gamma_embed = nn.Linear(num_classes, num_features)
-#         self.beta_embed = nn.Linear(num_classes, num_features)
-
-#     def forward(self, x, y):
-#         out = self.bn(x)
-#         y = y.long()
-#         # Assuming y is a batch of class labels, convert to one-hot encoding
-#         y_one_hot = F.one_hot(y, num_classes=self.gamma_embed.in_features).float()
-        
-#         gamma = self.gamma_embed(y_one_hot).view(-1, self.num_features, 1, 1)
-#         beta = self.beta_embed(y_one_hot).view(-1, self.num_features, 1, 1)
-
-#         return out * gamma + beta
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class ConditionalBatchNorm2d(nn.Module):
     def __init__(self, num_features, num_classes, dropout_rate=0.3, noise_std=0.1):
@@ -122,39 +94,39 @@ class D_Block(nn.Module):
 
         if initial_block:
             self.minibatchstd = Minibatch_std()
-            conv1_in_ch = in_ch + 1  # Adding 1 to account for minibatch std feature
+            self.conv1 = EqualizedLR_Conv2d(in_ch + 1, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(4, 4), stride=(1, 1))
+            self.outlayer = nn.Sequential(
+                        nn.Flatten(),
+                        nn.Linear(out_ch, 1)
+                        )
         else:
             self.minibatchstd = None
-            conv1_in_ch = in_ch
-            self.cbn = ConditionalBatchNorm2d(out_ch, labels_size)  # Conditional Batch Norm for non-initial blocks
-
-        # Convolutional layers with Equalized Learning Rate
-        self.conv1 = EqualizedLR_Conv2d(conv1_in_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        kernel_size_conv2 = (4, 4) if initial_block else (3, 3)
-        self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=kernel_size_conv2, stride=(1, 1), padding=0 if initial_block else (1, 1))
-
-        # Output layer for the initial block
-        if initial_block:
-            self.outlayer = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(out_ch, 1)
-            )
-        else:
+            self.conv1 = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
             self.outlayer = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2))
+        self.norm = ConditionalBatchNorm2d(out_ch, labels_size)  # Conditional Batch Norm for non-initial blocks
 
+        self.norm1 = ConditionalBatchNorm2d(out_ch, labels_size)  # CLN for the first conv layer
+        self.norm2 = ConditionalBatchNorm2d(out_ch, labels_size)
         self.relu = nn.LeakyReLU(0.2)
+        nn.init.normal_(self.conv1.weight)
+        nn.init.normal_(self.conv2.weight)
+        nn.init.zeros_(self.conv1.bias)
+        nn.init.zeros_(self.conv2.bias)
 
-    def forward(self, x, y=None):
+    def forward(self, x, y):
         if self.minibatchstd is not None:
             x = self.minibatchstd(x)
         
         x = self.conv1(x)
+        # x = self.norm1(x, y)
         x = self.relu(x)
 
-        if self.minibatchstd is None and y is not None:
-            x = self.cbn(x, y)  # Apply CBN only in non-initial blocks
-
+        x = self.norm(x, y)
+        
         x = self.conv2(x)
+        # x = self.norm2(x, y)
         x = self.relu(x)
         x = self.outlayer(x)
 

@@ -116,11 +116,11 @@ def show_result(G, num_epoch, show = False, save = False, path = 'result.png', n
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
-  parser.add_argument('--epochs', type=int, default=65, help='training epoch number')
-  parser.add_argument('--out_res', type=int, default=128, help='The resolution of final output image')
+  parser.add_argument('--epochs', type=int, default=120, help='training epoch number')
+  parser.add_argument('--out_res', type=int, default=256, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
   parser.add_argument('--cuda', action='store_true', help='Using GPU to train')
-  parser.add_argument('--img_size', type=int, default=256, help='The resolution of dataset image')
+  parser.add_argument('--img_size', type=int, default=512, help='The resolution of dataset image')
 
 
   opt = parser.parse_args()
@@ -141,7 +141,7 @@ def main():
     os.makedirs(weight_dir)
 
   ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
-  schedule = [[0, 10, 20 ,25, 30, 35],[16, 16, 16, 8, 8, 4],[1, 3, 3, 3, 3, 5]]
+  schedule = [[0, 20, 45 ,70, 90, 110, 130],[8, 8, 8, 8, 8, 4, 2],[0, 5, 5, 5, 6, 8, 10]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
@@ -214,7 +214,8 @@ def main():
     batch_size = schedule[1][c]
     growing = schedule[2][c]
     #dataset = datasets.ImageFolder(data_dir, transform=transform)
-    dataset = datasets.CelebA(data_dir, split='all', transform=transform)
+    #dataset = datasets.CelebA(data_dir, split='all', transform=transform)
+    dataset = datasets.ImageFolder(os.path.join(f'../GAN/data/celeba_hq'), transform=transform)
     data_loader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, num_workers=8, drop_last=True)
 
     tot_iter_num = (len(dataset)/batch_size)
@@ -229,7 +230,8 @@ def main():
     batch_size = schedule[1][c]
     growing = schedule[2][c]
 
-    dataset = datasets.CelebA(data_dir, split='all', transform=transform, download=False)
+    #dataset = datasets.CelebA(data_dir, split='all', transform=transform, download=False)
+    dataset = datasets.ImageFolder(os.path.join(f'../GAN/data/celeba_hq'), transform=transform)
     data_loader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, num_workers=8, drop_last=True)
 
     tot_iter_num = (len(dataset)/batch_size)
@@ -382,7 +384,7 @@ def main():
         D_running_loss = 0.0
         G_running_loss = 0.0
 
-      if batches_done % 5000 == 0:
+      if batches_done % 2000 == 0:
         show_result(G_net, (epoch+1), save=True, path='output/img' + str(batches_done) + '.png', nb=16, latent_size=latent_size, label_size=label_size, sub_size=size)
         #show_result(G_net, (epoch+1), save=True, path=original_fixed_p, nb=1)
 
