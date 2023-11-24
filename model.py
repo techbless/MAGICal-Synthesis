@@ -149,25 +149,27 @@ class Generator(nn.Module):
     self.alpha = 1
     self.fade_iters = 0
     self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-    self.current_net = nn.ModuleList([G_Block(latent_size*2, latent_size, initial_block=True)])
-    self.toRGBs = nn.ModuleList([ToRGB(latent_size, 3, tanh=True)])
+    self.current_net = nn.ModuleList([G_Block(latent_size*2, latent_size*2, initial_block=True)])
+    self.toRGBs = nn.ModuleList([ToRGB(latent_size*2, 3, tanh=True)])
     self.embed = nn.Embedding(label_size, latent_size)
 
+    print("Dep of G[%d]: in(%d), out(%d)" % (1, latent_size*2, latent_size*2))
     # __add_layers(out_res)
     for d in range(2, int(np.log2(out_res))):
-      if d < 6:
+      if d < 4:
         ## low res blocks 8x8, 16x16, 32x32 with 512 channels
         in_ch, out_ch = 512, 512
       else:
         ## from 64x64(5th block), the number of channels halved for each block
-        in_ch, out_ch = int(512 / 2**(d - 6)), int(512 / 2**(d - 5))
+        in_ch, out_ch = int(512 / 2**(d - 4)), int(512 / 2**(d - 3))
       self.current_net.append(G_Block(in_ch, out_ch))
       self.toRGBs.append(ToRGB(out_ch, 3, tanh=True))
+      print("Dep of G[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
 
 
   def forward(self, z, label):
     label = label.long()
-    z = z.view(-1, self.latent_size, 1, 1)
+    z = z.view(-1, int(self.latent_size), 1, 1)
     embedded_label = self.embed(label).view(-1, self.latent_size, 1, 1)
     
     x = torch.cat((z, embedded_label), dim=1)
@@ -203,15 +205,18 @@ class Discriminator(nn.Module):
 
         self.downsample = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2))
 
-        self.current_net = nn.ModuleList([D_Block(latent_size, latent_size, label_size, initial_block=True)])
-        self.fromRGBs = nn.ModuleList([FromRGB(3, latent_size)])
+        self.current_net = nn.ModuleList([D_Block(latent_size*2, latent_size*2, label_size, initial_block=True)])
+        self.fromRGBs = nn.ModuleList([FromRGB(3, latent_size*2)])
+
+        print("Dep of D[%d]: in(%d), out(%d)" % (1, latent_size*2, latent_size*2))
         for d in range(2, int(np.log2(out_res))):
-            if d < 6:
+            if d < 4:
                 in_ch, out_ch = 512, 512
             else:
-                in_ch, out_ch = int(512 / 2**(d - 5)), int(512 / 2**(d - 6))
+                in_ch, out_ch = int(512 / 2**(d - 3)), int(512 / 2**(d - 4))
             self.current_net.append(D_Block(in_ch, out_ch, label_size))
-            self.fromRGBs.append(FromRGB(3, in_ch))
+            self.fromRGBs.append(FromRGB(3, in_ch)) # in_ch
+            print("Dep of D[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
   
     def forward(self, x_rgb, y):
         x = self.fromRGBs[self.depth-1](x_rgb)
