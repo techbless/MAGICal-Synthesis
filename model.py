@@ -18,13 +18,21 @@ class FromRGB(nn.Module):
     return self.relu(x)
 
 class ToRGB(nn.Module):
-  def __init__(self, in_ch, out_ch):
+  def __init__(self, in_ch, out_ch, tanh=False):
     super().__init__()
     self.conv = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(1,1), stride=(1, 1))
+    if tanh:
+      self.tanh = nn.Tanh()
+    else:
+      self.tanh = None
   
   def forward(self, x):
 
-    return self.conv(x)
+    x = self.conv(x)
+
+    if self.tanh is not None:
+      x = self.tanh(x)
+    return x
 
 
 class ConditionalBatchNorm2d(nn.Module):
@@ -53,7 +61,6 @@ class ConditionalBatchNorm2d(nn.Module):
         gamma, beta = gamma_beta.view(-1, 2, self.num_features, 1, 1).unbind(1)
 
         return out * gamma + beta
-
 
 
 class G_Block(nn.Module):
@@ -133,8 +140,6 @@ class D_Block(nn.Module):
         return x
 
 
-
-
 class Generator(nn.Module):
   def __init__(self, latent_size, label_size, out_res):
     super().__init__()
@@ -145,7 +150,7 @@ class Generator(nn.Module):
     self.fade_iters = 0
     self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
     self.current_net = nn.ModuleList([G_Block(latent_size*2, latent_size, initial_block=True)])
-    self.toRGBs = nn.ModuleList([ToRGB(latent_size, 3)])
+    self.toRGBs = nn.ModuleList([ToRGB(latent_size, 3, tanh=True)])
     self.embed = nn.Embedding(label_size, latent_size)
 
     # __add_layers(out_res)
@@ -157,7 +162,7 @@ class Generator(nn.Module):
         ## from 64x64(5th block), the number of channels halved for each block
         in_ch, out_ch = int(512 / 2**(d - 6)), int(512 / 2**(d - 5))
       self.current_net.append(G_Block(in_ch, out_ch))
-      self.toRGBs.append(ToRGB(out_ch, 3))
+      self.toRGBs.append(ToRGB(out_ch, 3, tanh=True))
 
 
   def forward(self, z, label):
