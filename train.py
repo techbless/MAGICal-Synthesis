@@ -141,11 +141,11 @@ def main():
     os.makedirs(weight_dir)
 
   ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
-  schedule = [[0, 20, 45 ,70, 90, 110, 130],[8, 8, 8, 8, 8, 4, 2],[0, 5, 5, 5, 6, 8, 10]]
+  schedule = [[0, 15, 30, 45, 60, 75, 90], [8, 8, 8, 8, 8, 4, 1], [0, 1, 1, 1, 2, 2, 2]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
-  latent_size = 512
+  latent_size = 256
   out_res = opt.out_res
   G_lr = 1e-4
   D_lr = 1e-4 * 4
@@ -356,7 +356,7 @@ def main():
       diff_cols = F.mse_loss(f_cols[:-1, :, :, :, -boundary_thickness:], f_cols[1:, :, :, :, :boundary_thickness])
       B_loss = diff_rows + diff_cols
 
-      B_lambda = 15
+      B_lambda = 3.5
 
       fake_out = D_net(fake, y)
       G_loss = - fake_out.mean()
