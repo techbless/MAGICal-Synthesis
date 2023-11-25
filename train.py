@@ -145,7 +145,7 @@ def main():
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
-  latent_size = 256
+  latent_size = 384 # the dimension of latent vector for conditional will be (latent_size) / 3
   out_res = opt.out_res
   G_lr = 1e-4
   D_lr = 1e-4 * 4
@@ -356,7 +356,7 @@ def main():
       diff_cols = F.mse_loss(f_cols[:-1, :, :, :, -boundary_thickness:], f_cols[1:, :, :, :, :boundary_thickness])
       B_loss = diff_rows + diff_cols
 
-      B_lambda = 3.5
+      B_lambda = 5 * (G_net.depth)
 
       fake_out = D_net(fake, y)
       G_loss = - fake_out.mean()

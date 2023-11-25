@@ -149,11 +149,11 @@ class Generator(nn.Module):
     self.alpha = 1
     self.fade_iters = 0
     self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-    self.current_net = nn.ModuleList([G_Block(latent_size*2, latent_size*2, initial_block=True)])
-    self.toRGBs = nn.ModuleList([ToRGB(latent_size*2, 3, tanh=True)])
-    self.embed = nn.Embedding(label_size, latent_size)
+    self.current_net = nn.ModuleList([G_Block(int(latent_size/3*4), int(latent_size/3*4), initial_block=True)])
+    self.toRGBs = nn.ModuleList([ToRGB(int(latent_size/3*4), 3, tanh=True)])
+    self.embed = nn.Embedding(label_size, int(latent_size/3))
 
-    print("Dep of G[%d]: in(%d), out(%d)" % (1, latent_size*2, latent_size*2))
+    print("Dep of G[%d]: in(%d), out(%d)" % (1, int(latent_size/3*4), int(latent_size/3*4)))
     # __add_layers(out_res)
     for d in range(2, int(np.log2(out_res))):
       if d < 4:
@@ -170,10 +170,8 @@ class Generator(nn.Module):
   def forward(self, z, label):
     label = label.long()
     z = z.view(-1, int(self.latent_size), 1, 1)
-    embedded_label = self.embed(label).view(-1, self.latent_size, 1, 1)
-    
+    embedded_label = self.embed(label).view(-1, int(self.latent_size/3), 1, 1)
     x = torch.cat((z, embedded_label), dim=1)
-
 
     for block in self.current_net[:self.depth-1]:
       x = block(x)
@@ -205,10 +203,10 @@ class Discriminator(nn.Module):
 
         self.downsample = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2))
 
-        self.current_net = nn.ModuleList([D_Block(latent_size*2, latent_size*2, label_size, initial_block=True)])
-        self.fromRGBs = nn.ModuleList([FromRGB(3, latent_size*2)])
+        self.current_net = nn.ModuleList([D_Block(512, 512, label_size, initial_block=True)])
+        self.fromRGBs = nn.ModuleList([FromRGB(3, 512)])
 
-        print("Dep of D[%d]: in(%d), out(%d)" % (1, latent_size*2, latent_size*2))
+        print("Dep of D[%d]: in(%d), out(%d)" % (1, 512, 512))
         for d in range(2, int(np.log2(out_res))):
             if d < 4:
                 in_ch, out_ch = 512, 512
