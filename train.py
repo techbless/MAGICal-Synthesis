@@ -117,7 +117,7 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
   parser.add_argument('--epochs', type=int, default=120, help='training epoch number')
-  parser.add_argument('--out_res', type=int, default=256, help='The resolution of final output image')
+  parser.add_argument('--out_res', type=int, default=128, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
   parser.add_argument('--cuda', action='store_true', help='Using GPU to train')
   parser.add_argument('--img_size', type=int, default=512, help='The resolution of dataset image')
@@ -141,7 +141,7 @@ def main():
     os.makedirs(weight_dir)
 
   ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
-  schedule = [[0, 15, 30, 45, 60, 75, 90], [8, 8, 8, 8, 8, 4, 1], [0, 1, 1, 1, 2, 2, 2]]
+  schedule = [[0, 15, 30, 45, 60, 75, 90], [4, 4, 4, 4, 4, 2, 1], [0, 5, 5, 5, 5, 5, 5]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
@@ -166,6 +166,8 @@ def main():
   fixed_noise = torch.randn(16, latent_size, 1, 1, device=device)
   D_optimizer = optim.Adam(D_net.parameters(), lr=D_lr, betas=(0, 0.99))
   G_optimizer = optim.Adam(G_net.parameters(), lr=G_lr, betas=(0, 0.99))
+
+  classification_loss = torch.nn.CrossEntropyLoss()
 
 
   D_running_loss = 0.0
@@ -246,6 +248,7 @@ def main():
   print("Output Resolution: %d x %d" % (size, size))
   print("Batch Size: %d" % (batch_size))
   print("Growing Phase %d" % (growing))
+  print("Depth of Nets: %d" % (G_net.depth))
 
   y_real = torch.ones(batch_size * n_sub, 1).cuda()
   y_fake = torch.zeros(batch_size * n_sub, 1).cuda()
@@ -269,6 +272,7 @@ def main():
         print("Output Resolution: %d x %d" % (size, size))
         print("Batch Size: %d" % (batch_size))
         print("Growing Phase %d" % (growing))
+        print("Depth of Nets: %d" % (G_net.depth))
 
     y = np.concatenate([[[i]] * batch_size for i in range(n_sub)])
     y = torch.from_numpy(y).cuda()
@@ -281,11 +285,10 @@ def main():
 
       ##  update D
       if size != out_res:
-        x = F.interpolate(x[0], size=size*2).to(device)
+        x = F.interpolate(x[0], size=size*int(math.sqrt(label_size))).to(device)
       else:
         x = x[0].to(device)
 
-      
       subregions = crop_to_subregions(x, size)
       xs = torch.cat(subregions, dim=0)
       xs = xs.view(-1, 3, size, size)
@@ -301,8 +304,13 @@ def main():
 
       fake = G_net(noise, y)
 
-      fake_out = D_net(fake.detach(), y)
-      real_out = D_net(xs, y)
+
+      fake_out, _ = D_net(fake.detach())
+      real_out, real_class_out = D_net(xs)
+
+      d_class_loss = classification_loss(real_class_out, y.long().view(-1))
+
+      
 
       ## Gradient Penalty
 
@@ -310,7 +318,7 @@ def main():
       eps = eps.expand_as(xs)
       x_hat = eps * xs + (1 - eps) * fake.detach()
       x_hat.requires_grad = True
-      px_hat = D_net(x_hat, y)
+      px_hat, _ = D_net(x_hat)
       grad = torch.autograd.grad(
                     outputs = px_hat.sum(),
                     inputs = x_hat, 
@@ -321,7 +329,7 @@ def main():
 
       ###########
 
-      D_loss = fake_out.mean() - real_out.mean() + gradient_penalty
+      D_loss = fake_out.mean() - real_out.mean() + gradient_penalty + d_class_loss
 
       D_loss.backward()
       D_optimizer.step()
@@ -356,11 +364,16 @@ def main():
       diff_cols = F.mse_loss(f_cols[:-1, :, :, :, -boundary_thickness:], f_cols[1:, :, :, :, :boundary_thickness])
       B_loss = diff_rows + diff_cols
 
-      B_lambda = 5 * (G_net.depth)
+      B_lambda = 15.5 * np.log10(G_net.depth + .5)
 
-      fake_out = D_net(fake, y)
-      G_loss = - fake_out.mean()
-      G_train_loss = G_loss + B_lambda * B_loss
+      fake_out, fake_class_out = D_net(fake)
+      d_class_loss = classification_loss(fake_class_out, y.long().view(-1))
+
+      G_loss = - fake_out.mean() 
+      G_train_loss = G_loss + B_lambda * B_loss + d_class_loss
+
+
+      
 
       G_train_loss.backward()
       G_optimizer.step()

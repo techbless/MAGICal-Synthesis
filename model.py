@@ -35,34 +35,6 @@ class ToRGB(nn.Module):
     return x
 
 
-class ConditionalBatchNorm2d(nn.Module):
-    def __init__(self, num_features, num_classes, dropout_rate=0.3, noise_std=0.1):
-        super().__init__()
-        self.num_features = num_features
-        self.bn = nn.BatchNorm2d(num_features, affine=False)
-        self.affine_transform = nn.Linear(num_classes, 2 * num_features)
-        self.dropout = nn.Dropout(p=dropout_rate)
-        self.noise_std = noise_std
-
-    def forward(self, x, y):
-        out = self.bn(x)
-        y = y.long()
-        y_one_hot = F.one_hot(y, num_classes=self.affine_transform.in_features).float()
-
-        # Apply dropout to the one-hot encoding
-        y_one_hot = self.dropout(y_one_hot)
-        
-        # Add Gaussian noise to the one-hot encoding
-        if self.training:  # Only add noise during training
-            noise = torch.randn_like(y_one_hot) * self.noise_std
-            y_one_hot = y_one_hot + noise
-
-        gamma_beta = self.affine_transform(y_one_hot)
-        gamma, beta = gamma_beta.view(-1, 2, self.num_features, 1, 1).unbind(1)
-
-        return out * gamma + beta
-
-
 class G_Block(nn.Module):
   def __init__(self, in_ch, out_ch, initial_block=False):
     super().__init__()
@@ -103,39 +75,31 @@ class D_Block(nn.Module):
             self.minibatchstd = Minibatch_std()
             self.conv1 = EqualizedLR_Conv2d(in_ch + 1, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
             self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(4, 4), stride=(1, 1))
-            self.outlayer = nn.Sequential(
-                        nn.Flatten(),
-                        nn.Linear(out_ch, 1)
-                        )
+            self.outlayer = None
         else:
             self.minibatchstd = None
             self.conv1 = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
             self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
             self.outlayer = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2))
-        self.norm = ConditionalBatchNorm2d(out_ch, labels_size)  # Conditional Batch Norm for non-initial blocks
-
-        self.norm1 = ConditionalBatchNorm2d(out_ch, labels_size)  # CLN for the first conv layer
-        self.norm2 = ConditionalBatchNorm2d(out_ch, labels_size)
+       
         self.relu = nn.LeakyReLU(0.2)
         nn.init.normal_(self.conv1.weight)
         nn.init.normal_(self.conv2.weight)
         nn.init.zeros_(self.conv1.bias)
         nn.init.zeros_(self.conv2.bias)
 
-    def forward(self, x, y):
+    def forward(self, x):
         if self.minibatchstd is not None:
             x = self.minibatchstd(x)
         
         x = self.conv1(x)
-        # x = self.norm1(x, y)
         x = self.relu(x)
 
-        x = self.norm(x, y)
-        
         x = self.conv2(x)
-        # x = self.norm2(x, y)
         x = self.relu(x)
-        x = self.outlayer(x)
+
+        if self.outlayer is not None:
+          x = self.outlayer(x)
 
         return x
 
@@ -175,6 +139,7 @@ class Generator(nn.Module):
 
     for block in self.current_net[:self.depth-1]:
       x = block(x)
+
     out = self.current_net[self.depth-1](x)
     x_rgb = self.toRGBs[self.depth-1](out)
     if self.alpha < 1:
@@ -205,6 +170,13 @@ class Discriminator(nn.Module):
 
         self.current_net = nn.ModuleList([D_Block(512, 512, label_size, initial_block=True)])
         self.fromRGBs = nn.ModuleList([FromRGB(3, 512)])
+        self.classifiers = nn.ModuleList([nn.Linear(512, label_size)])
+        self.outlayer = nn.Sequential(
+                        nn.Flatten(),
+                        nn.Linear(512, 1)
+                        )
+
+        self.flatten = nn.Flatten()
 
         print("Dep of D[%d]: in(%d), out(%d)" % (1, 512, 512))
         for d in range(2, int(np.log2(out_res))):
@@ -214,12 +186,13 @@ class Discriminator(nn.Module):
                 in_ch, out_ch = int(512 / 2**(d - 3)), int(512 / 2**(d - 4))
             self.current_net.append(D_Block(in_ch, out_ch, label_size))
             self.fromRGBs.append(FromRGB(3, in_ch)) # in_ch
+            self.classifiers.append(nn.Linear(out_ch, label_size))
             print("Dep of D[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
   
-    def forward(self, x_rgb, y):
+    def forward(self, x_rgb):
         x = self.fromRGBs[self.depth-1](x_rgb)
 
-        x = self.current_net[self.depth-1](x, y)
+        x = self.current_net[self.depth-1](x)
         if self.alpha < 1:
             x_rgb = self.downsample(x_rgb)
             x_old = self.fromRGBs[self.depth-2](x_rgb)
@@ -227,9 +200,16 @@ class Discriminator(nn.Module):
             self.alpha += self.fade_iters
 
         for block in reversed(self.current_net[:self.depth-1]):
-            x = block(x, y)
+            x = block(x)
 
-        return x
+        # x = self.outlayer(x)
+
+        x = self.flatten(x)
+        class_output = self.classifiers[self.depth - 1](x)
+
+        validity_output = self.outlayer(x)
+
+        return validity_output, class_output
     
     def growing_net(self, num_iters):
         self.fade_iters = 1 / num_iters
