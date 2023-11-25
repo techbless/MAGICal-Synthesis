@@ -120,12 +120,12 @@ class Generator(nn.Module):
     print("Dep of G[%d]: in(%d), out(%d)" % (1, int(latent_size/3*4), int(latent_size/3*4)))
     # __add_layers(out_res)
     for d in range(2, int(np.log2(out_res))):
-      if d < 4:
+      if d < 5:
         ## low res blocks 8x8, 16x16, 32x32 with 512 channels
         in_ch, out_ch = 512, 512
       else:
         ## from 64x64(5th block), the number of channels halved for each block
-        in_ch, out_ch = int(512 / 2**(d - 4)), int(512 / 2**(d - 3))
+        in_ch, out_ch = int(512 / 2**(d - 5)), int(512 / 2**(d - 4))
       self.current_net.append(G_Block(in_ch, out_ch))
       self.toRGBs.append(ToRGB(out_ch, 3, tanh=True))
       print("Dep of G[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
@@ -170,20 +170,21 @@ class Discriminator(nn.Module):
 
         self.current_net = nn.ModuleList([D_Block(512, 512, label_size, initial_block=True)])
         self.fromRGBs = nn.ModuleList([FromRGB(3, 512)])
-        self.classifiers = nn.ModuleList([nn.Linear(512, label_size)])
         self.outlayer = nn.Sequential(
                         nn.Flatten(),
                         nn.Linear(512, 1)
                         )
 
+        self.classifier = nn.Linear(512, label_size)
+
         self.flatten = nn.Flatten()
 
         print("Dep of D[%d]: in(%d), out(%d)" % (1, 512, 512))
         for d in range(2, int(np.log2(out_res))):
-            if d < 4:
+            if d < 5:
                 in_ch, out_ch = 512, 512
             else:
-                in_ch, out_ch = int(512 / 2**(d - 3)), int(512 / 2**(d - 4))
+                in_ch, out_ch = int(512 / 2**(d - 4)), int(512 / 2**(d - 5))
             self.current_net.append(D_Block(in_ch, out_ch, label_size))
             self.fromRGBs.append(FromRGB(3, in_ch)) # in_ch
             self.classifiers.append(nn.Linear(out_ch, label_size))
@@ -192,20 +193,21 @@ class Discriminator(nn.Module):
     def forward(self, x_rgb):
         x = self.fromRGBs[self.depth-1](x_rgb)
 
+        
         x = self.current_net[self.depth-1](x)
+        
         if self.alpha < 1:
             x_rgb = self.downsample(x_rgb)
             x_old = self.fromRGBs[self.depth-2](x_rgb)
             x = (1 - self.alpha) * x_old + self.alpha * x
             self.alpha += self.fade_iters
-
-        for block in reversed(self.current_net[:self.depth-1]):
+        
+        for block in reversed(self.current_net[:self.depth - 1]):
             x = block(x)
 
-        # x = self.outlayer(x)
 
         x = self.flatten(x)
-        class_output = self.classifiers[self.depth - 1](x)
+        class_output = self.classifier(x)
 
         validity_output = self.outlayer(x)
 
