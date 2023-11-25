@@ -117,7 +117,7 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
   parser.add_argument('--epochs', type=int, default=120, help='training epoch number')
-  parser.add_argument('--out_res', type=int, default=128, help='The resolution of final output image')
+  parser.add_argument('--out_res', type=int, default=256, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
   parser.add_argument('--cuda', action='store_true', help='Using GPU to train')
   parser.add_argument('--img_size', type=int, default=512, help='The resolution of dataset image')
@@ -141,6 +141,7 @@ def main():
     os.makedirs(weight_dir)
 
   ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
+  # schedule = [[0, 2, 3, 4, 5, 6, 7], [4, 4, 4, 32, 4, 2, 1], [0, 1, 1, 1, 1, 1, 5]]
   schedule = [[0, 15, 30, 45, 60, 75, 90], [4, 4, 4, 4, 4, 2, 1], [0, 5, 5, 5, 5, 5, 5]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
@@ -283,11 +284,13 @@ def main():
     for i, x in enumerate(databar):
       batches_done = (epoch - 1) * len(data_loader) + i
 
+      x = F.interpolate(x[0], size=size*int(math.sqrt(label_size))).to(device)
       ##  update D
-      if size != out_res:
-        x = F.interpolate(x[0], size=size*int(math.sqrt(label_size))).to(device)
-      else:
-        x = x[0].to(device)
+      # if size != opt.img_size:
+      #   x = F.interpolate(x[0], size=size*int(math.sqrt(label_size))).to(device)
+      # else:
+      #   x = x[0].to(device)
+
 
       subregions = crop_to_subregions(x, size)
       xs = torch.cat(subregions, dim=0)
@@ -304,10 +307,8 @@ def main():
 
       fake = G_net(noise, y)
 
-
       fake_out, _ = D_net(fake.detach())
       real_out, real_class_out = D_net(xs)
-
       d_class_loss = classification_loss(real_class_out, y.long().view(-1))
 
       
@@ -367,6 +368,7 @@ def main():
       B_lambda = 15.5 * np.log10(G_net.depth + .5)
 
       fake_out, fake_class_out = D_net(fake)
+      
       d_class_loss = classification_loss(fake_class_out, y.long().view(-1))
 
       G_loss = - fake_out.mean() 

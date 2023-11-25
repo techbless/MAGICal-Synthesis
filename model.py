@@ -187,7 +187,6 @@ class Discriminator(nn.Module):
                 in_ch, out_ch = int(512 / 2**(d - 4)), int(512 / 2**(d - 5))
             self.current_net.append(D_Block(in_ch, out_ch, label_size))
             self.fromRGBs.append(FromRGB(3, in_ch)) # in_ch
-            self.classifiers.append(nn.Linear(out_ch, label_size))
             print("Dep of D[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
   
     def forward(self, x_rgb):
