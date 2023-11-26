@@ -112,21 +112,38 @@ def show_result(G, num_epoch, show = False, save = False, path = 'result.png', n
         plt.close(fig)
 
     G.train()
+    
+def sliding_window_labels(grid_size, window_size, step):
+    labels = np.arange(grid_size**2).reshape((grid_size, grid_size))
+    sub_regions = []
+
+    for i in range(0, grid_size - window_size + 1, step):
+        for j in range(0, grid_size - window_size + 1, step):
+            window = labels[i:i+window_size, j:j+window_size]
+            sub_regions.append(window.flatten())
+
+    return sub_regions
 
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
   parser.add_argument('--epochs', type=int, default=120, help='training epoch number')
-  parser.add_argument('--out_res', type=int, default=256, help='The resolution of final output image')
+  parser.add_argument('--out_res', type=int, default=128, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
   parser.add_argument('--cuda', action='store_true', help='Using GPU to train')
   parser.add_argument('--img_size', type=int, default=512, help='The resolution of dataset image')
-
+  parser.add_argument('--win_size', type=int, default=2, help='The window size of training')
 
   opt = parser.parse_args()
 
   n_sub = int((opt.img_size / opt.out_res) ** 2)
+  
   label_size = n_sub
+  n_sub_on_axis = int(math.sqrt(label_size))
+                      
+  sliding_indices = sliding_window_labels(n_sub_on_axis, opt.win_size, 1)
+  
+  print(sliding_indices)
 
   root = opt.root
   data_dir = root + 'dataset/'
@@ -142,7 +159,7 @@ def main():
 
   ## The schedule contains [num of epoches for starting each size][batch size for each size][num of epoches for the transition phase]
   # schedule = [[0, 2, 3, 4, 5, 6, 7], [4, 4, 4, 32, 4, 2, 1], [0, 1, 1, 1, 1, 1, 5]]
-  schedule = [[0, 15, 30, 45, 60, 75, 90], [4, 4, 4, 4, 4, 2, 1], [0, 5, 5, 5, 5, 5, 5]]
+  schedule = [[0, 15, 30, 45, 60, 75, 90], [4, 4, 4, 4, 2, 2, 1], [0, 5, 5, 5, 5, 5, 5]]
   batch_size = schedule[1][0]
   growing = schedule[2][0]
   epochs = opt.epochs
@@ -213,7 +230,6 @@ def main():
     else:
       c = 0
 
-    print(c)
     batch_size = schedule[1][c]
     growing = schedule[2][c]
     #dataset = datasets.ImageFolder(data_dir, transform=transform)
@@ -253,6 +269,8 @@ def main():
 
   y_real = torch.ones(batch_size * n_sub, 1).cuda()
   y_fake = torch.zeros(batch_size * n_sub, 1).cuda()
+  
+  
 
   
   for epoch in range(1+opt.resume, opt.epochs+1):
@@ -275,8 +293,11 @@ def main():
         print("Growing Phase %d" % (growing))
         print("Depth of Nets: %d" % (G_net.depth))
 
-    y = np.concatenate([[[i]] * batch_size for i in range(n_sub)])
-    y = torch.from_numpy(y).cuda()
+    # y = np.concatenate([[[i]] * batch_size for i in range(n_sub)])
+    # y = torch.from_numpy(y).cuda()
+
+    
+    
 
     print("epoch: %i/%i" % (int(epoch), int(epochs)))
     databar = tqdm(data_loader, unit="batch", ncols=120, miniters=0)
@@ -285,68 +306,86 @@ def main():
       batches_done = (epoch - 1) * len(data_loader) + i
 
       x = F.interpolate(x[0], size=size*int(math.sqrt(label_size))).to(device)
-      ##  update D
-      # if size != opt.img_size:
-      #   x = F.interpolate(x[0], size=size*int(math.sqrt(label_size))).to(device)
-      # else:
-      #   x = x[0].to(device)
 
 
       subregions = crop_to_subregions(x, size)
-      xs = torch.cat(subregions, dim=0)
-      xs = xs.view(-1, 3, size, size)
-      xs = Variable(xs.cuda())
-      D_net.zero_grad()
-
+      
+      fakes = []
       noise = torch.randn(x.size(0), latent_size)
-      noise = noise.repeat(label_size, 1)
       noise = Variable(noise.cuda())
+      
+      y = torch.empty(0).cuda()
+      
+      #for idx, xs in enumerate(subregions):
+      current_window = sliding_indices[i % len(sliding_indices)]
+      for idx in current_window:
+        xs = subregions[idx]
+        #xs = torch.cat(subregions, dim=0)
+        #single_y = np.concatenate([[[i]] * 1 for i in range(n_sub)])
+        single_y = np.array([[idx]] * batch_size)
+        single_y = torch.from_numpy(single_y).cuda()
+        
+        y = torch.cat((y, single_y), dim=0)
+        
+    
+        xs = xs.view(-1, 3, size, size)
+        xs = Variable(xs.cuda())
+        D_net.zero_grad()
 
+        # noise = torch.randn(samples.size(0), latent_size, 1, 1, device=device)
 
-      # noise = torch.randn(samples.size(0), latent_size, 1, 1, device=device)
+        fake = G_net(noise, single_y)
+        
+        fakes.append(fake)
 
-      fake = G_net(noise, y)
-
-      fake_out, _ = D_net(fake.detach())
-      real_out, real_class_out = D_net(xs)
-      d_class_loss = classification_loss(real_class_out, y.long().view(-1))
+        fake_out, _ = D_net(fake.detach())
+        real_out, real_class_out = D_net(xs)
+        d_class_loss = classification_loss(real_class_out, single_y.long().view(-1))
 
       
 
-      ## Gradient Penalty
+        ## Gradient Penalty
 
-      eps = torch.rand(xs.size(0), 1, 1, 1, device=device)
-      eps = eps.expand_as(xs)
-      x_hat = eps * xs + (1 - eps) * fake.detach()
-      x_hat.requires_grad = True
-      px_hat, _ = D_net(x_hat)
-      grad = torch.autograd.grad(
-                    outputs = px_hat.sum(),
-                    inputs = x_hat, 
-                    create_graph=True
-                    )[0]
-      grad_norm = grad.view(xs.size(0), -1).norm(2, dim=1)
-      gradient_penalty = lambd * ((grad_norm  - 1)**2).mean()
+        eps = torch.rand(xs.size(0), 1, 1, 1, device=device)
+        eps = eps.expand_as(xs)
+        x_hat = eps * xs + (1 - eps) * fake.detach()
+        x_hat.requires_grad = True
+        px_hat, _ = D_net(x_hat)
+        grad = torch.autograd.grad(
+                      outputs = px_hat.sum(),
+                      inputs = x_hat, 
+                      create_graph=True
+                      )[0]
+        grad_norm = grad.view(xs.size(0), -1).norm(2, dim=1)
+        gradient_penalty = lambd * ((grad_norm  - 1)**2).mean()
 
-      ###########
+        ###########
 
-      D_loss = fake_out.mean() - real_out.mean() + gradient_penalty + d_class_loss
+        D_loss = fake_out.mean() - real_out.mean() + gradient_penalty + d_class_loss
 
-      D_loss.backward()
-      D_optimizer.step()
+        D_loss.backward()
+        D_optimizer.step()
 
       ##  update G
 
+      fake = torch.cat(fakes, dim=0)
       G_net.zero_grad()
-
+      # noise = torch.randn(x.size(0), latent_size)
+      # noise = noise.repeat(label_size, 1)
+      # noise = Variable(noise.cuda())
+      # fake = G_net(noise, y)
 
       sub = []
-      for j in range(n_sub):
+      #for j in range(n_sub): # opt.winsize ** 2
+      for j in range(opt.win_size ** 2): # opt.winsize ** 2
           start_j = j * batch_size
           sub.append(fake[start_j:start_j+batch_size])
 
-      n_sub_h = int(math.sqrt(label_size))
-      n_sub_w = int(math.sqrt(label_size))
+      n_sub_h = opt.win_size # opt.win_size
+      n_sub_w = opt.win_size # opt.win_size
+      
+      # n_sub_h = int(math.sqrt(label_size)) # opt.win_size
+      # n_sub_w = int(math.sqrt(label_size)) # opt.win_size
 
 
       # (NSUB, B, C, H, W)
@@ -369,7 +408,7 @@ def main():
 
       fake_out, fake_class_out = D_net(fake)
       
-      d_class_loss = classification_loss(fake_class_out, y.long().view(-1))
+      d_class_loss = classification_loss(fake_class_out, y.long().view(-1)) # BCE
 
       G_loss = - fake_out.mean() 
       G_train_loss = G_loss + B_lambda * B_loss + d_class_loss
