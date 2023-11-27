@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils as utils
 
+import numpy as np
+
 
 class DResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2):
@@ -58,25 +60,32 @@ class GResidualBlock(nn.Module):
       
 class Generator(nn.Module):
   # initializers
-  def __init__(self, ngf=512, latent_size=384, label_size=128):
+  def __init__(self, ngf=512, latent_size=384, label_size=128, sub_res=128):
     super(Generator, self).__init__()
     self.ngf = ngf
     self.latent_size = latent_size
     self.label_size = label_size
     
     self.embed = nn.Embedding(label_size, label_size)
-    self.fc1 = nn.Linear(latent_size + label_size, 4*4*ngf*8)  # latent vector
-    self.res_block2 = GResidualBlock(ngf*8, ngf*4, stride=2)
-    self.res_block3 = GResidualBlock(ngf*4, ngf*4, stride=2)
-    self.res_block4 = GResidualBlock(ngf*4, ngf*2, stride=2)
-    self.res_block5 = GResidualBlock(ngf*2, ngf*2, stride=2)
-    self.res_block6 = GResidualBlock(ngf*2, ngf, stride=2)
-    self.res_block7 = GResidualBlock(ngf, ngf, stride=2)
+    self.fc1 = nn.Linear(latent_size + label_size, 4*4*ngf)  # latent vector
+    
+    self.blocks = nn.ModuleList([])
+    
+    for d in range(1, int(np.log2(sub_res)) - 1):
+      if d < 3:
+        in_ch, out_ch = ngf, ngf
+      else:
+        in_ch, out_ch = int(ngf / 2**(d-3)), int(ngf / 2**(d-2))
+      self.blocks.append(GResidualBlock(in_ch, out_ch, stride=2))
+      print(in_ch, out_ch)
 
-    self.deconv8 = nn.Sequential(
-      nn.ConvTranspose2d(ngf*2, 3, 4, stride=2, padding=1, bias=False),
+    d = int(np.log2(sub_res)) - 2
+    print(int(ngf / 2**(d-2)), 3)
+    self.out_layer = nn.Sequential(
+      nn.ConvTranspose2d(int(ngf / 2**(d-2)), 3, 1, stride=1, bias=False),
       nn.Tanh()
     )
+    
 
   # weight_init
   def weight_init(self, mean, std):
@@ -89,14 +98,11 @@ class Generator(nn.Module):
       embedded_label = self.embed(label).view(-1, self.label_size)
       x = torch.cat((z, embedded_label), dim=1)
 
-      x = self.fc1(x).view(-1, self.ngf*8, 4, 4)
-      x = self.res_block2(x)
-      x = self.res_block3(x)
-      x = self.res_block4(x)
-      x = self.res_block5(x)
-      #x = self.res_block6(x)
-      #x = self.res_block7(x)
-      x = self.deconv8(x)
+      x = self.fc1(x).view(-1, self.ngf, 4, 4)
+      for block in self.blocks:
+        x = block(x)
+      
+      x = self.out_layer(x)
 
       return x
 
@@ -111,20 +117,23 @@ class Discriminator(nn.Module):
     
     # Embedding which outputs a vector of img_size
     self.embed = nn.Embedding(self.label_size, sub_res * sub_res)
+    
+    self.blocks = nn.ModuleList([])
+    for d in range(2, int(np.log2(sub_res)) - 1):
+      if d < 3:
+        in_ch, out_ch = ndf, ndf
+      else:
+        in_ch, out_ch = int(ndf / 2**(d - 2)), int(ndf / 2**(d - 3))
+      print(in_ch, out_ch)
+      self.blocks.append(DResidualBlock(in_ch, out_ch, stride=2))
+    
+    d = int(np.log2(sub_res)) - 2
+    print(3 + 1, int(ndf / 2**(d - 2)))
+    self.blocks.append(DResidualBlock(3 + 1, int(ndf / 2**(d - 2)), stride=2))
 
-    self.res_block1 = DResidualBlock(3 + 1, ndf, stride=2) # 3(RGB) + 1(Condition)
-    self.res_block2 = DResidualBlock(ndf, ndf, stride=2)
-    self.res_block3 = DResidualBlock(ndf, ndf*2, stride=2)
-    self.res_block4 = DResidualBlock(ndf*2, ndf*2, stride=2)
-    self.res_block5 = DResidualBlock(ndf*2, ndf*4, stride=2)
-    #self.res_block6 = DResidualBlock(ndf*4, ndf*4, stride=2)
-    #self.res_block7 = DResidualBlock(ndf*4, ndf*8, stride=2)
-    #self.res_block8 = DResidualBlock(ndf*8, ndf*4, stride=1)
-
-
-    self.fc9 = nn.Sequential(
+    self.out_layer = nn.Sequential(
       nn.Flatten(),
-      nn.Linear(4 * 4 * ndf * 4, 1)
+      nn.Linear(4 * 4 * ndf, 1)
     )
 
     # weight_init
@@ -137,18 +146,11 @@ class Discriminator(nn.Module):
     label = label.long()
     embedded_label = self.embed(label).view(-1, 1, self.sub_res, self.sub_res)
     
-
     x = torch.cat([x, embedded_label], dim=1)
 
-    x = self.res_block1(x)
-    x = self.res_block2(x)
-    x = self.res_block3(x)
-    x = self.res_block4(x)
-    x = self.res_block5(x)
-    #x = self.res_block6(x)
-    #x = self.res_block7(x)
-    #x = self.res_block8(x)
-    x = self.fc9(x)
+    for block in reversed(self.blocks):
+      x = block(x)
+    x = self.out_layer(x)
 
     return x
       
