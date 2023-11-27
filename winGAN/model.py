@@ -128,12 +128,17 @@ class Discriminator(nn.Module):
       self.blocks.append(DResidualBlock(in_ch, out_ch, stride=2))
     
     d = int(np.log2(sub_res)) - 2
-    print(3 + 1, int(ndf / 2**(d - 2)))
-    self.blocks.append(DResidualBlock(3 + 1, int(ndf / 2**(d - 2)), stride=2))
+    print(3, int(ndf / 2**(d - 2)))
+    self.blocks.append(DResidualBlock(3, int(ndf / 2**(d - 2)), stride=2))
 
     self.out_layer = nn.Sequential(
       nn.Flatten(),
       nn.Linear(4 * 4 * ndf, 1)
+    )
+    
+    self.classifier = nn.Sequential(
+      nn.Flatten(),
+      nn.Linear(4 * 4 * ndf, self.label_size)
     )
 
     # weight_init
@@ -142,17 +147,18 @@ class Discriminator(nn.Module):
       normal_init(self._modules[m], mean, std)
 
     # forward method
-  def forward(self, x, label):
-    label = label.long()
-    embedded_label = self.embed(label).view(-1, 1, self.sub_res, self.sub_res)
+  def forward(self, x):
+    # label = label.long()
+    # embedded_label = self.embed(label).view(-1, 1, self.sub_res, self.sub_res)
     
-    x = torch.cat([x, embedded_label], dim=1)
+    # x = torch.cat([x, embedded_label], dim=1)
 
     for block in reversed(self.blocks):
       x = block(x)
-    x = self.out_layer(x)
+    validity_output = self.out_layer(x)
+    class_output = self.classifier(x)
 
-    return x
+    return validity_output, class_output
       
 
 def normal_init(m, mean, std):

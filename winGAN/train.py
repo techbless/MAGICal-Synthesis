@@ -26,9 +26,9 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--root', type=str, default='./', help='directory contrains the data and outputs')
   parser.add_argument('--epochs', type=int, default=160, help='training epoch number')
-  parser.add_argument('--sub_res', type=int, default=128, help='The resolution of final output image')
+  parser.add_argument('--sub_res', type=int, default=64, help='The resolution of final output image')
   parser.add_argument('--resume', type=int, default=0, help='continues from epoch number')
-  parser.add_argument('--full_res', type=int, default=512, help='The resolution of dataset image')
+  parser.add_argument('--full_res', type=int, default=192, help='The resolution of dataset image')
   parser.add_argument('--window_size', type=int, default=2, help='The window size of training')
   parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
   parser.add_argument('--latent_size', type=int, default=128, help='ngf')
@@ -61,9 +61,10 @@ def main():
   G_scheduler = torch.optim.lr_scheduler.StepLR(G_optimizer, step_size=100, gamma=0.5)
   D_scheduler = torch.optim.lr_scheduler.StepLR(D_optimizer, step_size=100, gamma=0.5)
 
+  classification_loss = torch.nn.CrossEntropyLoss()
 
   summary(G, input_size=[(1, opt.latent_size), (1, 1)])
-  summary(D, input_size=[(1, 3, opt.sub_res, opt.sub_res), (1, 1)])
+  summary(D, input_size=[(1, 3, opt.sub_res, opt.sub_res)])
 
   transform = transforms.Compose([
     transforms.Resize(opt.full_res),
@@ -77,7 +78,7 @@ def main():
         
     batch_size=opt.batch_size, 
     shuffle=True,
-    num_workers=3,
+    num_workers=4,
     pin_memory=True,
     drop_last=True
   )
@@ -88,12 +89,12 @@ def main():
       i = 0
       
       for x, _ in tepoch:
-        x = Variable(x.cuda())
+        # x = Variable(x.cuda())
         
         batches_done = epoch * len(train_loader) + i
         i = i + 1
         
-        subregions = crop_to_subregions(x, opt.sub_res)
+        #subregions = crop_to_subregions(x, opt.sub_res)
       
         fakes = []
         noise = torch.randn(x.size(0), opt.latent_size)
@@ -102,10 +103,13 @@ def main():
         y = torch.empty(0).cuda()
         
         current_window = sliding_indices[i % len(sliding_indices)]
-        for idx in current_window:
-          xs = subregions[idx]
+        subregions = crop_to_subregions(x, opt.sub_res, indices_of_interest=current_window)
+        for idx, xs in enumerate(subregions):
+          #xs = subregions[idx]
+          xs = xs.cuda()
           
-          single_y = np.array([[idx]] * opt.batch_size)
+          
+          single_y = np.array([[current_window[idx]]] * opt.batch_size)
           single_y = torch.from_numpy(single_y).cuda()
         
           y = torch.cat((y, single_y), dim=0)
@@ -117,7 +121,13 @@ def main():
           fake = G(noise, single_y)
           fakes.append(fake)
           
-          D_loss = -torch.mean(D(xs, single_y)) + torch.mean(D(fake.detach(), single_y))
+          fake_D_out, _ = D(fake.detach())
+          real_D_out, real_class_out = D(xs)
+          
+          D_class_loss = classification_loss(real_class_out, single_y.long().view(-1))
+          
+          D_loss = fake_D_out.mean() - real_D_out.mean() + D_class_loss
+          #D_loss = -torch.mean(D(xs, single_y)) + torch.mean(D(fake.detach(), single_y))
           gradient_penalty = compute_gradient_penalty(D, xs, fake.detach(), single_y)
           lambda_gp = 10
           D_loss = D_loss + lambda_gp * gradient_penalty
@@ -152,13 +162,21 @@ def main():
         diff_cols = F.mse_loss(f_cols[:-1, :, :, :, -boundary_thickness:], f_cols[1:, :, :, :, :boundary_thickness])
         B_loss = diff_rows + diff_cols
 
-        B_lambda = 55.5
+        # if epoch + 1 >= 3:
+        #   B_lambda = 15.5
+        # else:
+        #   B_lambda = 1
+        
+        B_lambda = 2.5 * np.log10(0.2 * epoch + 1)
 
-        fake_out = D(fake, y)
+        fake_out, fake_class_out = D(fake)
+        
+        D_class_loss = classification_loss(fake_class_out, y.long().view(-1))
+        
         
 
         G_loss = - fake_out.mean() 
-        G_train_loss = G_loss + B_lambda * B_loss
+        G_train_loss = G_loss + B_lambda * B_loss + D_class_loss
         
         G_train_loss.backward()
         G_optimizer.step()

@@ -11,7 +11,7 @@ def compute_gradient_penalty(D, real_samples, fake_samples, y):
 
     # Get random interpolation between real and fake samples
     interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
-    d_interpolates = D(interpolates, y)
+    d_interpolates, _ = D(interpolates)
     fake = torch.ones(d_interpolates.size()).cuda()
 
     # Get gradient w.r.t. interpolates
@@ -29,24 +29,32 @@ def compute_gradient_penalty(D, real_samples, fake_samples, y):
 
     return gradient_penalty
 
-def crop_to_subregions(image, sub_size):
-  _, _, H, W = image.shape  # Assuming image is a tensor of shape [B, C, H, W]
-  assert H % sub_size == 0 and W % sub_size == 0, "Image dimensions must be divisible by sub_size"
 
-  subregions = []
+def crop_to_subregions(image, sub_size, indices_of_interest=None):
+    _, _, H, W = image.shape  # Assuming image is a tensor of shape [B, C, H, W]
+    assert H % sub_size == 0 and W % sub_size == 0, "Image dimensions must be divisible by sub_size"
 
-  # Calculate number of subregions in each dimension
-  n_sub_h = H // sub_size
-  n_sub_w = W // sub_size
+    subregions = []
 
-  for i in range(n_sub_h):
-    for j in range(n_sub_w):
-      start_i = i * sub_size
-      start_j = j * sub_size
-      subregion = image[:, :, start_i:start_i + sub_size, start_j:start_j + sub_size]
-      subregions.append(subregion)
+    # Calculate number of subregions in each dimension
+    n_sub_h = H // sub_size
+    n_sub_w = W // sub_size
 
-  return subregions
+    # Flatten the indices list if it's not None
+    if indices_of_interest is not None:
+        indices_of_interest = set(indices_of_interest)
+
+    for i in range(n_sub_h):
+        for j in range(n_sub_w):
+            index = i * n_sub_w + j  # Calculate flat index
+            if indices_of_interest is None or index in indices_of_interest:
+                start_i = i * sub_size
+                start_j = j * sub_size
+                subregion = image[:, :, start_i:start_i + sub_size, start_j:start_j + sub_size]
+                subregions.append(subregion)
+
+    return subregions
+
 
 
 def sliding_window_labels(grid_size, window_size, step):
