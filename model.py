@@ -1,223 +1,210 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.utils as utils
+import torchvision.models as models
+
 import numpy as np
-import torch.optim as optim
-from utils import EqualizedLR_Conv2d, Pixel_norm, Minibatch_std
 
 
-
-class FromRGB(nn.Module):
-  def __init__(self, in_ch, out_ch):
-    super().__init__()
-    self.conv = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(1, 1), stride=(1, 1))
-    self.relu = nn.LeakyReLU(0.2)
-    
-  def forward(self, x):
-    x = self.conv(x)
-    return self.relu(x)
-
-class ToRGB(nn.Module):
-  def __init__(self, in_ch, out_ch, tanh=False):
-    super().__init__()
-    self.conv = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(1,1), stride=(1, 1))
-    if tanh:
-      self.tanh = nn.Tanh()
-    else:
-      self.tanh = None
-  
-  def forward(self, x):
-
-    x = self.conv(x)
-
-    if self.tanh is not None:
-      x = self.tanh(x)
-    return x
-
-
-class G_Block(nn.Module):
-  def __init__(self, in_ch, out_ch, initial_block=False):
-    super().__init__()
-    if initial_block:
-      self.upsample = None
-      self.conv1 = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(4, 4), stride=(1, 1), padding=(3, 3))
-    else:
-      self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-      self.conv1 = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-    self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-    self.relu = nn.LeakyReLU(0.2)
-    self.pixelwisenorm = Pixel_norm()
-    nn.init.normal_(self.conv1.weight)
-    nn.init.normal_(self.conv2.weight)
-    nn.init.zeros_(self.conv1.bias)
-    nn.init.zeros_(self.conv2.bias)
-
-  def forward(self, x):
-    if self.upsample is not None:
-      x = self.upsample(x)
-
-    # x = self.conv1(x*scale1)
-    x = self.conv1(x)
-    x = self.relu(x)
-    x = self.pixelwisenorm(x)
-    # x = self.conv2(x*scale2)
-    x = self.conv2(x)
-    x = self.relu(x)
-    x = self.pixelwisenorm(x)
-    return x
-
-
-class D_Block(nn.Module):
-    def __init__(self, in_ch, out_ch, labels_size, initial_block=False):
-        super().__init__()
-
-        if initial_block:
-            self.minibatchstd = Minibatch_std()
-            self.conv1 = EqualizedLR_Conv2d(in_ch + 1, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-            self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(4, 4), stride=(1, 1))
-            self.outlayer = None
+class DResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=2, initial=False):
+        super(DResidualBlock, self).__init__()
+        self.initial = initial
+        self.lrelu = nn.LeakyReLU(0.2, inplace=True)
+        
+        if initial:
+          self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=stride, bias=False)
         else:
-            self.minibatchstd = None
-            self.conv1 = EqualizedLR_Conv2d(in_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-            self.conv2 = EqualizedLR_Conv2d(out_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-            self.outlayer = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2))
-       
-        self.relu = nn.LeakyReLU(0.2)
-        nn.init.normal_(self.conv1.weight)
-        nn.init.normal_(self.conv2.weight)
-        nn.init.zeros_(self.conv1.bias)
-        nn.init.zeros_(self.conv2.bias)
+          self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+         
+
+          self.use_shortcut = stride != 1 or in_channels != out_channels
+          if self.use_shortcut:
+              self.shortcut = nn.Sequential(
+                  nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, padding=0, bias=False),
+              )
+          else:
+              self.shortcut = nn.Identity()
 
     def forward(self, x):
-        if self.minibatchstd is not None:
-            x = self.minibatchstd(x)
+        if self.initial:
+          out = self.conv1(x)
+          out = self.lrelu(out)
+        else:
+          out = self.conv1(x)
+          #out = self.lrelu(out)
+
+          shortcut = self.shortcut(x)
+          out += shortcut
+          out = self.lrelu(out)
+
+        return out
+
+
+class GResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=2, initial=False):
+        super(GResidualBlock, self).__init__()
+        self.initial = initial
         
-        x = self.conv1(x)
-        x = self.relu(x)
+        self.relu = nn.ReLU(inplace=True)
+        
+        if initial:
+          self.conv1 = nn.ConvTranspose2d(in_channels, out_channels, stride=stride, kernel_size=4, bias=False)
+        else:
+          self.conv1 = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, output_padding=1, bias=False)
 
-        x = self.conv2(x)
-        x = self.relu(x)
+          self.use_shortcut = stride != 1 or in_channels != out_channels
+          if self.use_shortcut:
+              self.shortcut = nn.Sequential(
+                  nn.ConvTranspose2d(in_channels, out_channels, kernel_size=1, stride=stride, padding=0, output_padding=1, bias=False),
+              )
+          else:
+              self.shortcut = nn.Identity()
 
-        if self.outlayer is not None:
-          x = self.outlayer(x)
+    def forward(self, x):
+      if self.initial:
+        out = self.conv1(x)
+        out = self.relu(out)
+      else:
+        out = self.conv1(x)
+        #out = self.relu(out)
 
-        return x
+        shortcut = self.shortcut(x)
+        out += shortcut
+        out = self.relu(out)
 
-
+      return out
+      
+      
 class Generator(nn.Module):
-  def __init__(self, latent_size, label_size, out_res):
-    super().__init__()
+  # initializers
+  def __init__(self, ngf=512, latent_size=384, label_size=128, sub_res=128):
+    super(Generator, self).__init__()
+    self.ngf = ngf
     self.latent_size = latent_size
     self.label_size = label_size
-    self.depth = 1
-    self.alpha = 1
-    self.fade_iters = 0
-    self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-    self.current_net = nn.ModuleList([G_Block(int(latent_size/3*4), int(latent_size/3*4), initial_block=True)])
-    self.toRGBs = nn.ModuleList([ToRGB(int(latent_size/3*4), 3, tanh=True)])
-    self.embed = nn.Embedding(label_size, int(latent_size/3))
-
-    print("Dep of G[%d]: in(%d), out(%d)" % (1, int(latent_size/3*4), int(latent_size/3*4)))
-    # __add_layers(out_res)
-    for d in range(2, int(np.log2(out_res))):
-      if d < 5:
-        ## low res blocks 8x8, 16x16, 32x32 with 512 channels
-        in_ch, out_ch = 512, 512
+    
+    self.embed = nn.Embedding(label_size, label_size)
+    
+    self.blocks = nn.ModuleList([GResidualBlock(latent_size + label_size, ngf, stride=1, initial=True)])
+    print(latent_size + label_size, ngf)
+    
+    for d in range(1, int(np.log2(sub_res)) - 1):
+      if d < 3:
+        in_ch, out_ch = ngf, ngf
       else:
-        ## from 64x64(5th block), the number of channels halved for each block
-        in_ch, out_ch = int(512 / 2**(d - 5)), int(512 / 2**(d - 4))
-      self.current_net.append(G_Block(in_ch, out_ch))
-      self.toRGBs.append(ToRGB(out_ch, 3, tanh=True))
-      print("Dep of G[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
+        in_ch, out_ch = int(ngf / 2**(d-3)), int(ngf / 2**(d-2))
+      self.blocks.append(GResidualBlock(in_ch, out_ch, stride=2))
+      print(in_ch, out_ch)
 
+    d = int(np.log2(sub_res)) - 2
+    if(d < 3):
+      out_in_ch = ngf
+    else:
+      out_in_ch = int(ngf / 2**(d-2))
+    self.out_layer = nn.Sequential(
+      nn.ConvTranspose2d(out_in_ch, 3, 1, stride=1, bias=False),
+      nn.Tanh()
+    )
+    
 
+  # weight_init
+  def weight_init(self, mean, std):
+      for m in self._modules:
+          normal_init(self._modules[m], mean, std)
+
+  # forward method
   def forward(self, z, label):
-    label = label.long()
-    z = z.view(-1, int(self.latent_size), 1, 1)
-    embedded_label = self.embed(label).view(-1, int(self.latent_size/3), 1, 1)
-    x = torch.cat((z, embedded_label), dim=1)
+      label = label.long()
+      embedded_label = self.embed(label).view(-1, self.label_size, 1, 1)
+      x = torch.cat((z, embedded_label), dim=1)
 
-    for block in self.current_net[:self.depth-1]:
-      x = block(x)
+      #x = self.fc1(x).view(-1, self.ngf, 4, 4)
+      for block in self.blocks:
+        x = block(x)
+      
+      x = self.out_layer(x)
 
-    out = self.current_net[self.depth-1](x)
-    x_rgb = self.toRGBs[self.depth-1](out)
-    if self.alpha < 1:
-      x_old = self.upsample(x)
-      old_rgb = self.toRGBs[self.depth-2](x_old)
-      x_rgb = (1-self.alpha)* old_rgb + self.alpha * x_rgb
+      return x
 
-      self.alpha += self.fade_iters
 
-    return x_rgb
-    
-
-  def growing_net(self, num_iters):
-    
-    self.fade_iters = 1/num_iters
-    self.alpha = 1/num_iters
-
-    self.depth += 1
-
+#(X - F + 2P) / S +1
 class Discriminator(nn.Module):
-    def __init__(self, latent_size, label_size, out_res):
-        super().__init__()
-        self.depth = 1
-        self.alpha = 1
-        self.fade_iters = 0
-
-        self.downsample = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2))
-
-        self.current_net = nn.ModuleList([D_Block(512, 512, label_size, initial_block=True)])
-        self.fromRGBs = nn.ModuleList([FromRGB(3, 512)])
-        self.outlayer = nn.Sequential(
-                        nn.Flatten(),
-                        nn.Linear(512, 1)
-                        )
-
-        self.classifier = nn.Linear(512, label_size)
-
-        self.flatten = nn.Flatten()
-
-        print("Dep of D[%d]: in(%d), out(%d)" % (1, 512, 512))
-        for d in range(2, int(np.log2(out_res))):
-            if d < 5:
-                in_ch, out_ch = 512, 512
-            else:
-                in_ch, out_ch = int(512 / 2**(d - 4)), int(512 / 2**(d - 5))
-            self.current_net.append(D_Block(in_ch, out_ch, label_size))
-            self.fromRGBs.append(FromRGB(3, in_ch)) # in_ch
-            print("Dep of D[%d]: in(%d), out(%d)" % (d, in_ch, out_ch))
-  
-    def forward(self, x_rgb):
-        x = self.fromRGBs[self.depth-1](x_rgb)
-
-        
-        x = self.current_net[self.depth-1](x)
-        
-        if self.alpha < 1:
-            x_rgb = self.downsample(x_rgb)
-            x_old = self.fromRGBs[self.depth-2](x_rgb)
-            x = (1 - self.alpha) * x_old + self.alpha * x
-            self.alpha += self.fade_iters
-        
-        for block in reversed(self.current_net[:self.depth - 1]):
-            x = block(x)
-
-
-        x = self.flatten(x)
-        class_output = self.classifier(x)
-
-        validity_output = self.outlayer(x)
-
-        return validity_output, class_output
+  def __init__(self, ndf=512, label_size = 128, sub_res=128):
+    super(Discriminator, self).__init__()
+    self.ndf = ndf
+    self.sub_res = sub_res
+    self.label_size = label_size
     
-    def growing_net(self, num_iters):
-        self.fade_iters = 1 / num_iters
-        self.alpha = 1 / num_iters
-        self.depth += 1
+    self.blocks = nn.ModuleList([DResidualBlock(ndf, ndf, stride=1, initial=True)])
+    print(ndf, ndf)
+    for d in range(2, int(np.log2(sub_res)) - 1):
+      if d < 3:
+        in_ch, out_ch = ndf, ndf
+      else:
+        in_ch, out_ch = int(ndf / 2**(d - 2)), int(ndf / 2**(d - 3))
+      print(in_ch, out_ch)
+      self.blocks.append(DResidualBlock(in_ch, out_ch, stride=2))
+    
+    d = int(np.log2(sub_res)) - 2
+    if(d < 3):
+      out_out_ch = ndf
+    else:
+      out_out_ch = int(ndf / 2**(d - 2))
+    self.blocks.append(DResidualBlock(3, out_out_ch, stride=2))
 
+    self.out_layer = nn.Sequential(
+      nn.Flatten(),
+      nn.Linear(ndf, 1)
+    )
+    
+    self.classifier = nn.Sequential(
+      nn.Flatten(),
+      nn.Linear(ndf, self.label_size)
+    )
 
+    # weight_init
+  def weight_init(self, mean, std):
+    for m in self._modules:
+      normal_init(self._modules[m], mean, std)
 
+    # forward method
+  def forward(self, x):
+    # label = label.long()
+    # embedded_label = self.embed(label).view(-1, 1, self.sub_res, self.sub_res)
+    
+    # x = torch.cat([x, embedded_label], dim=1)
 
+    for block in reversed(self.blocks):
+      x = block(x)
+    validity_output = self.out_layer(x)
+    class_output = self.classifier(x)
 
+    return validity_output, class_output
+  
+
+class FeatureExtractor(nn.Module):
+    def __init__(self):
+        super(FeatureExtractor, self).__init__()
+        vgg = models.vgg11(pretrained=True)
+        self.features = vgg.features
+
+        # Freeze the VGG model's parameters
+        for param in self.features.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        return self.features(x)
+
+      
+
+# def calculate_output_size(input_size, filter_size, stride, padding):
+#     return (input_size - filter_size + 2 * padding) // stride + 1
+
+      
+
+def normal_init(m, mean, std):
+  if isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Conv2d):
+    m.weight.data.normal_(mean, std)
+    #m.bias.data.zero_()
