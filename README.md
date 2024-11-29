@@ -18,7 +18,8 @@ research have high efficiency, consistency, quality, and generality
 Keywords: Data Augmentation, Generative Adversarial Networks, Artificial Intelligence, Performance Optimization
 
 ## Framework Architecture
-
+> proposed in our research
+> 
 ### Sub-Region Patch Based Approach
 
 We cropped the full-size images into ($N \times N$) sub-regions with the resolution $(\frac{W}{N} \times \frac{H}{N})$.
@@ -39,10 +40,6 @@ step6. calculate the boundary loss and train G
 
 
 ### Natural Boundary and Coherent Sub-regions
-
-> proposed in our research   
-
-
 
 - We added the boundary loss to minimize the differences among the lines of 1 pixels where the sub-regions meet each other, which induce the framework to learn the natural boundary.
 - It is similar to `mse loss` like below.
