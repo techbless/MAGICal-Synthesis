@@ -3,6 +3,20 @@
 [https://doi.org/10.6117/kmeps.2023.30.4.069](https://doi.org/10.6117/kmeps.2023.30.4.069)
 
 
+Abstract: With the rapid growth of artificial intelligence, the demand for semiconductors is enormously increasing
+everywhere. To ensure the manufacturing quality and quantity simultaneously, the importance of automatic defect detection
+during the packaging process has been re-visited by adapting various deep learning-based methodologies into automatic
+packaging defect inspection. Deep learning (DL) models require a large amount of data for training, but due to the nature
+of the semiconductor industry where security is important, sharing and labeling of relevant data is challenging, making
+it difficult for model training. In this study, we propose a new framework for securing sufficient data for DL models
+with fewer computing resources through a divide-and-conquer approach. The proposed method divides high-resolution
+images into pre-defined sub-regions and assigns conditional labels to each region, then trains individual sub-regions and
+boundaries with boundary loss inducing the globally coherent and seamless images. Afterwards, full-size image is
+reconstructed by combining divided sub-regions. The experimental results show that the images obtained through this
+research have high efficiency, consistency, quality, and generality
+
+Keywords: Data Augmentation, Generative Adversarial Networks, Artificial Intelligence, Performance Optimization
+
 ## Framework Architecture
 
 ### Sub-Region Patch Based Approach
