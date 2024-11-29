@@ -38,20 +38,14 @@ step6. calculate the boundary loss and train G
 - We added the boundary loss to minimize the differences among the lines of 1 pixels where the sub-regions meet each other, which induce the framework to learn the natural boundary.
 - It is similar to `mse loss` like below.
 
-$$
-L_{boundary} = \lambda_b \times \left( \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{r}\_{i, \mathrm{end}} - \hat{r}\_{i+1, \mathrm{start}})^2 + \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{c}\_{i, \mathrm{end}} - \hat{c}\_{i+1, \mathrm{start}})^2 \right)
-$$
 
 $$
-\frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{r}\_{i, \text{end}} - \hat{r}\_{i+1, \text{start}})^2 + \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{c}\_{i, \text{end}} - \hat{c}\_{i+1, \text{start}})^2
-$$
-
-$$
-L_B = \frac{\lambda_B}{n-1} \left( \sum_{i=0}^{n-1} \left( \hat{r}\_{i,\mathrm{end}} - \hat{r}\_{i+1,\mathrm{start}} \right)^2 + \sum_{i=0}^{n-1} \left( \hat{c}\_{i,\mathrm{end}} - \hat{c}\_{i+1,\mathrm{start}} \right)^2 \right)
+L_B = \frac{\lambda_B}{n} \left( \sum_{i=0}^{n-1} \left( \hat{r}\_{i,\mathrm{bottom}} - \hat{r}\_{i+1,\mathrm{top}} \right)^2 + \sum_{i=0}^{n-1} \left( \hat{c}\_{i,\mathrm{right}} - \hat{c}\_{i+1,\mathrm{left}} \right)^2 \right)
 $$
 
 
 - $\hat{r}_{i, (start|end)}$: the last $n$ column (the right|leftmost) vector of ith of concatenated sub regions vertically
+- $\hat{c}_{i, (top|bottom)}$: the last $n$ row (the top|bottommost) vector of ith of concatenated sub regions horizontally
 - $n$: the number of sub-regions in a row or a column.
 - $\lambda_b$: the weight of $L_{boundary}$, which controls the strength of $L_{boundary}$
 
@@ -60,10 +54,7 @@ $$
 
 ### Wasserstein GAN
 
-$$
-L_W = \mathbb{E}_{\mathbf{x} \sim \mathbb{P}\_r}[D(\mathbf{x})] - \mathbb{E}_{\mathbf{\tilde{x}} \sim \mathbb{P}\_g}[D(\mathbf{\tilde{x}})]
-$$
-
+$$ L_W = \mathbb{E}\_{ \mathbf{x} \sim \mathbb{P}\_r}[D( \mathbf{x})] - \mathbb{E}\_{ \mathbf{ \tilde{x}} \sim \mathbb{P}\_g}[D( \mathbf{ \tilde{x}})] $$
 
 
 $$
