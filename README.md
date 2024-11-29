@@ -1,8 +1,3 @@
-
-<script type="text/javascript" async
-  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-MML-AM_CHTML">
-</script>
-
 ## MAGICal Synthesis: Memory-Efficient Approach for Generative Semiconductor Package Image Construction
 
 [https://doi.org/10.6117/kmeps.2023.30.4.069](https://doi.org/10.6117/kmeps.2023.30.4.069)
