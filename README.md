@@ -1,4 +1,8 @@
 
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-MML-AM_CHTML">
+</script>
+
 ## MAGICal Synthesis: Memory-Efficient Approach for Generative Semiconductor Package Image Construction
 
 [https://doi.org/10.6117/kmeps.2023.30.4.069](https://doi.org/10.6117/kmeps.2023.30.4.069)
@@ -35,18 +39,16 @@ step6. calculate the boundary loss and train G
 - It is similar to `mse loss` like below.
 
 $$
-L_{boundary} = \lambda_b \times \left( \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{r}_{i, \text{end}} - \hat{r}_{i+1, \text{start}})^2 + \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{c}_{i, \text{end}} - \hat{c}_{i+1, \text{start}})^2 \right)
+L_{boundary} = \lambda_b \times \left( \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{r}\_{i, \mathrm{end}} - \hat{r}\_{i+1, \mathrm{start}})^2 + \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{c}\_{i, \mathrm{end}} - \hat{c}\_{i+1, \mathrm{start}})^2 \right)
 $$
 
 $$
-\frac{1}{n-1} \sum_{i=0}^{n-1} ({\hat{r}}_{i, \text{end}} - {\hat{r}}_{i+1, \text{start}})^2 + \frac{1}{n-1} \sum_{i=0}^{n-1} ({\hat{c}}_{i, \text{end}} - {\hat{c}}_{i+1, \text{start}})^2
+\frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{r}\_{i, \text{end}} - \hat{r}\_{i+1, \text{start}})^2 + \frac{1}{n-1} \sum_{i=0}^{n-1} (\hat{c}\_{i, \text{end}} - \hat{c}\_{i+1, \text{start}})^2
 $$
 
 $$
-L_B=\frac{\lambda_B}{n-1}\left(\sum_{i=0}^{n-1}\left({\hat{r}}_{i,\mathrm{end}}-{\hat{r}}_{i+1,\mathrm{start}}\right)^2+\sum_{i=0}^{n-1}\left({\hat{c}}_{i,\mathrm{end}}-{\hat{c}}_{i+1,\mathrm{start}}\right)^2\right)
+L_B = \frac{\lambda_B}{n-1} \left( \sum_{i=0}^{n-1} \left( \hat{r}\_{i,\mathrm{end}} - \hat{r}\_{i+1,\mathrm{start}} \right)^2 + \sum_{i=0}^{n-1} \left( \hat{c}\_{i,\mathrm{end}} - \hat{c}\_{i+1,\mathrm{start}} \right)^2 \right)
 $$
-
-    
 
 
 - $\hat{r}_{i, (start|end)}$: the last $n$ column (the right|leftmost) vector of ith of concatenated sub regions vertically
@@ -59,12 +61,16 @@ $$
 ### Wasserstein GAN
 
 $$
-L_W = \mathbb{E}_{\mathbf{x} \sim \mathbb{P}_r}[D(\mathbf{x})] - \mathbb{E}_{\mathbf{\tilde{x}} \sim \mathbb{P}_g}[D(\mathbf{\tilde{x}})]
+L_W = \mathbb{E}_{\mathbf{x} \sim \mathbb{P}\_r}[D(\mathbf{x})] - \mathbb{E}_{\mathbf{\tilde{x}} \sim \mathbb{P}\_g}[D(\mathbf{\tilde{x}})]
 $$
 
+
+
 $$
-L_{GP} = \lambda_{GP} \mathbb{E}_{\mathbf{\hat{x}} \sim \mathbb{P}_{\hat{x}}} \left[ \left( \|\nabla_{\mathbf{\hat{x}}} D(\mathbf{\hat{x}})\|_2 - 1 \right)^2 \right]
+L_{GP} = \lambda\_{GP} \mathbb{E}_{\mathbf{\hat{x}} \sim \mathbb{P}\_{\hat{x}}} \left[ \left( \|\nabla\_{\mathbf{\hat{x}}} D(\mathbf{\hat{x}})\|\_2 - 1 \right)^2 \right]
 $$
+
+
 
 - $\tilde{x}$: Generated (fake) data points produced by the generator
 - $\hat{x}$: Interpolated points between real and generated data, used specifically in the gradient penalty term of WGAN-GP
